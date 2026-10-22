@@ -1,0 +1,20 @@
+{
+  "ConnectionManager_connections": {
+    "transjakarta": {
+      "configVersion": 1,
+      "type": "mqtt",
+      "id": "transjakarta",
+      "name": "transjakarta (mosquitto)",
+      "host": "mosquitto",
+      "port": 1883,
+      "protocol": "mqtt",
+      "encryption": false,
+      "certValidation": true,
+      "clientId": "mqtt-explorer-transjakarta",
+      "subscriptions": [
+        { "topic": "#", "qos": 0 },
+        { "topic": "$SYS/#", "qos": 0 }
+      ]
+    }
+  }
+}

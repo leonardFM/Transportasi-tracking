@@ -1,0 +1,201 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: transjakarta_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-transjakarta}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Folder migrations berisi 001_*.sql dan 002_*.sql, dijalankan otomatis
+      # oleh image PostgreSQL HANYA saat volume masih kosong.
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - transjakarta_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: transjakarta_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - transjakarta_network
+    healthcheck:
+      # check_port_connectivity memastikan port AMQP (5672) benar-benar siap,
+      # bukan hanya proses rabbitmq yang masih booting.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: transjakarta_mosquitto
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+      - "${MQTT_WS_PORT:-9001}:9001"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - transjakarta_network
+    healthcheck:
+      # Publish probe memverifikasi broker benar-benar siap menerima koneksi
+      # dan publish, bukan sekadar prosesnya masih jalan.
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t healthcheck/probe -m ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # API + ingest MQTT + publish event geofence
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: transjakarta-fleet:latest
+    container_name: transjakarta_api
+    restart: unless-stopped
+    command: ["/app/api"]
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-transjakarta}?sslmode=disable
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      MQTT_BROKER: tcp://mosquitto:1883
+      PORT: 8000
+      GEOFENCE_LAT: ${GEOFENCE_LAT:--6.175392}
+      GEOFENCE_LNG: ${GEOFENCE_LNG:-106.827153}
+      GEOFENCE_RADIUS_M: ${GEOFENCE_RADIUS_M:-50}
+      GEOFENCE_STATE_TTL_SECONDS: ${GEOFENCE_STATE_TTL_SECONDS:-60}
+      GEOFENCE_EMIT_EXIT: ${GEOFENCE_EMIT_EXIT:-false}
+      LOCATION_MAX_FUTURE_SECONDS: ${LOCATION_MAX_FUTURE_SECONDS:-300}
+      LOCATION_MAX_AGE_SECONDS: ${LOCATION_MAX_AGE_SECONDS:-86400}
+      DEPENDENCY_TIMEOUT_SECONDS: ${DEPENDENCY_TIMEOUT_SECONDS:-120}
+      HEARTBEAT_ENABLED: ${HEARTBEAT_ENABLED:-true}
+      HEARTBEAT_STALE_SECONDS: ${HEARTBEAT_STALE_SECONDS:-30}
+      HEARTBEAT_OFFLINE_SECONDS: ${HEARTBEAT_OFFLINE_SECONDS:-120}
+    networks:
+      - transjakarta_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+
+  # Worker: mengonsumsi queue geofence_alerts
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: transjakarta-fleet:latest
+    container_name: transjakarta_worker
+    restart: unless-stopped
+    command: ["/app/worker"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-transjakarta}?sslmode=disable
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      DEPENDENCY_TIMEOUT_SECONDS: ${DEPENDENCY_TIMEOUT_SECONDS:-120}
+    networks:
+      - transjakarta_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # Simulator: mempublikasikan data mock lokasi ke MQTT tiap 2 detik
+  publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: transjakarta-fleet:latest
+    container_name: transjakarta_publisher
+    restart: unless-stopped
+    command: ["/app/publisher"]
+    environment:
+      MQTT_BROKER: tcp://mosquitto:1883
+      PUBLISHER_VEHICLES: ${PUBLISHER_VEHICLES:-B1234XYZ,B5678ABC}
+      PUBLISHER_INTERVAL: ${PUBLISHER_INTERVAL:-2}
+      # Publisher memakai titik & radius geofence yang sama dengan service API
+      # agar rute geraknya benar-benar melewati batas geofence.
+      GEOFENCE_LAT: ${GEOFENCE_LAT:--6.175392}
+      GEOFENCE_LNG: ${GEOFENCE_LNG:-106.827153}
+      GEOFENCE_RADIUS_M: ${GEOFENCE_RADIUS_M:-50}
+      PUBLISHER_ROUTE_PERIOD_SECONDS: ${PUBLISHER_ROUTE_PERIOD_SECONDS:-60}
+      PUBLISHER_ROUTE_BEARING_DEG: ${PUBLISHER_ROUTE_BEARING_DEG:-45}
+      PUBLISHER_ROUTE_SPREAD_DEG: ${PUBLISHER_ROUTE_SPREAD_DEG:-20}
+    networks:
+      - transjakarta_network
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  adminer:
+    image: adminer:latest
+    container_name: transjakarta_adminer
+    restart: unless-stopped
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    networks:
+      - transjakarta_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: transjakarta_dozzle
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "${DOZZLE_PORT:-8088}:8080"
+    networks:
+      - transjakarta_network
+
+  mqtt-explorer:
+    image: smeagolworms4/mqtt-explorer:latest
+    container_name: transjakarta_mqtt_explorer
+    restart: unless-stopped
+    environment:
+      HTTP_PORT: 4000
+    volumes:
+      - ./mqtt-explorer/settings.json:/mqtt-explorer/config/settings.json
+    ports:
+      - "${MQTT_EXPLORER_PORT:-3001}:4000"
+    networks:
+      - transjakarta_network
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+  mosquitto_data:
+  mosquitto_log:
+
+networks:
+  transjakarta_network:
+    driver: bridge

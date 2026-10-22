@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard Armada Transjakarta</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --line: #334155;
+    --muted: #94a3b8; --text: #e2e8f0;
+    --green: #4ade80; --red: #f87171; --yellow: #fbbf24; --blue: #38bdf8;
+  }
+  body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+
+  /* ---------- header ---------- */
+  header { padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; }
+  header .sub { font-size: 12.5px; color: var(--muted); }
+  header .right { margin-left: auto; font-size: 12.5px; color: var(--muted); display: flex; gap: 14px; align-items: center; }
+  .pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.ok   { background: #14532d; color: var(--green); }
+  .pill.err  { background: #450a0a; color: var(--red); }
+
+  main { padding: 14px; display: flex; flex-direction: column; gap: 12px; max-width: 1500px; width: 100%; margin: 0 auto; }
+
+  /* ---------- alur pipeline ---------- */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .panel > .title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 8px; }
+  .panel > .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+
+  .pipeline { display: flex; align-items: stretch; gap: 6px; overflow-x: auto; }
+  .step { flex: 1; min-width: 170px; background: #16213a; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; position: relative; }
+  .step .n { font-size: 10.5px; color: var(--muted); font-weight: 700; letter-spacing: .06em; }
+  .step .name { font-size: 13px; font-weight: 650; margin-top: 2px; }
+  .step .tech { font-size: 11.5px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  .step .live { font-size: 11.5px; margin-top: 6px; display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #475569; flex: none; }
+  .step.active .dot { background: var(--green); box-shadow: 0 0 0 0 rgba(74,222,128,.6); animation: pulse 1.6s infinite; }
+  .step.wait .dot { background: var(--yellow); }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(74,222,128,0); } 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0); } }
+  .arrow { align-self: center; color: #475569; font-size: 16px; flex: none; }
+
+  /* ---------- kartu ringkasan ---------- */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); }
+  .stat .value { font-size: 26px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .note { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .stat.green .value { color: var(--green); }
+  .stat.yellow .value { color: var(--yellow); }
+  .stat.blue .value { color: var(--blue); }
+  .stat.red .value { color: var(--red); }
+
+  /* ---------- area utama ---------- */
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 12px; align-items: start; }
+  @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
+
+  .map-wrap { position: relative; }
+  #map { height: 560px; border-radius: 10px; border: 1px solid var(--line); }
+  #map-fallback { display: none; padding: 24px; color: var(--red); font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .legend { position: absolute; z-index: 500; bottom: 14px; left: 12px; background: rgba(15,23,42,.92); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-size: 12px; line-height: 1.9; }
+  .legend .row { display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  .swatch.ring { border-radius: 50%; background: rgba(245,158,11,.25); border: 2px solid var(--yellow); }
+
+  .side { display: flex; flex-direction: column; gap: 12px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 5px 6px; border-bottom: 1px solid var(--line); font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+  td { padding: 6px; border-bottom: 1px solid #263349; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .badge.inside  { background: #14532d; color: var(--green); }
+  .badge.outside { background: #1e3a5f; color: var(--blue); }
+  .badge.online  { background: #14532d; color: var(--green); }
+  .badge.stale   { background: #422006; color: var(--yellow); }
+  .badge.offline { background: #450a0a; color: var(--red); }
+
+  .feed { list-style: none; font-size: 12.5px; max-height: 300px; overflow-y: auto; }
+  .feed li { padding: 8px 4px; border-bottom: 1px solid #263349; display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .feed li:last-child { border-bottom: none; }
+  .feed .who { font-weight: 700; }
+  .feed .what { color: var(--yellow); font-weight: 600; }
+  .feed .coords { color: var(--muted); font-size: 11.5px; }
+  .feed .when { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .empty { color: var(--muted); font-size: 12.5px; padding: 8px 4px; }
+
+  .veh-marker { background: var(--blue); color: #0f172a; font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 5px; border: 2px solid #0284c7; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.55); }
+  .veh-marker.inside { background: var(--green); border-color: #16a34a; }
+  .veh-marker.stale { background: var(--yellow); border-color: #d97706; }
+  .veh-marker.offline { background: var(--red); border-color: #b91c1c; color: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Dashboard Armada Transjakarta</h1>
+  <span class="sub">Pantau perjalanan data lokasi secara real-time: MQTT &rarr; PostgreSQL &rarr; Geofence &rarr; RabbitMQ &rarr; Worker</span>
+  <div class="right">
+    <span>Auto-refresh 2 detik</span>
+    <span id="hb-pipeline">MQTT: memuat...</span>
+    <span id="last-update">memuat...</span>
+    <span class="pill ok" id="api-status">API ...</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- 1. Alur proses pipeline -->
+  <section class="panel">
+    <div class="title">Alur Proses (Pipeline)</div>
+    <div class="pipeline" id="pipeline">
+      <div class="step" data-step="ingest">
+        <div class="n">LANGKAH 1</div>
+        <div class="name">Publisher kirim data</div>
+        <div class="tech">MQTT topic /fleet/vehicle/+/location, tiap 2 detik</div>
+        <div class="live"><span class="dot"></span><span class="txt">menunggu data...</span></div>
+      </div>
+      <div class="arrow">&#10132;</div>
+      <div class="step" data-step="db">
+        <div class="n">LANGKAH 2</div>
+        <div class="name">Disimpan ke database</div>
+        <div class="tech">Subscriber Go menyimpan ke tabel PostgreSQL vehicle_loctions</div>
+        <div class="live"><span class="dot"></span><span class="txt">menunggu data...</span></div>
+      </div>
+      <div class="arrow">&#10132;</div>
+      <div class="step" data-step="geo">
+        <div class="n">LANGKAH 3</div>
+        <div class="name">Dicek geofence</div>
+        <div class="tech">Jarak Haversine ke pusat geofence, radius 50 m</div>
+        <div class="live"><span class="dot"></span><span class="txt">menunggu data...</span></div>
+      </div>
+      <div class="arrow">&#10132;</div>
+      <div class="step" data-step="rabbit">
+        <div class="n">LANGKAH 4</div>
+        <div class="name">Event dikirim ke RabbitMQ</div>
+        <div class="tech">Exchange fleet.events &rarr; queue geofence_alerts (hanya jika MASUK geofence)</div>
+        <div class="live"><span class="dot"></span><span class="txt">menunggu event...</span></div>
+      </div>
+      <div class="arrow">&#10132;</div>
+      <div class="step" data-step="worker">
+        <div class="n">LANGKAH 5</div>
+        <div class="name">Worker memproses event</div>
+        <div class="tech">Worker Go membaca queue &amp; menampilkan event di log</div>
+        <div class="live"><span class="dot"></span><span class="txt">menunggu event...</span></div>
+      </div>
+      <div class="arrow">&#10132;</div>
+      <div class="step" data-step="hb">
+        <div class="n">LANGKAH 6</div>
+        <div class="name">Heartbeat &amp; deteksi offline</div>
+        <div class="tech">Umur data &gt; ambang stale &rarr; stale, &gt; ambang offline &rarr; offline</div>
+        <div class="live"><span class="dot"></span><span class="txt">memuat heartbeat...</span></div>
+      </div>
+    </div>
+    <div class="hint">
+      Hijau = langkah baru saja aktif. Kuning = menunggu (langkah 4-5 hanya berjalan saat ada kendaraan yang <b>masuk</b> geofence).
+      Untuk melihat log detail per payload, cari <b>trace=</b> di Dozzle (<a href="http://localhost:8088" style="color:#38bdf8" target="_blank">localhost:8088</a>).
+    </div>
+  </section>
+
+  <!-- 2. Ringkasan angka -->
+  <section class="stats">
+    <div class="stat blue">
+      <div class="label">Kendaraan terpantau</div>
+      <div class="value" id="stat-vehicles">-</div>
+      <div class="note">jumlah kendaraan dengan data lokasi</div>
+    </div>
+    <div class="stat green">
+      <div class="label">Sedang di dalam geofence</div>
+      <div class="value" id="stat-inside">-</div>
+      <div class="note">jarak &le; 50 m dari pusat geofence</div>
+    </div>
+    <div class="stat yellow">
+      <div class="label">Event geofence tercatat</div>
+      <div class="value" id="stat-events">-</div>
+      <div class="note">100 event terakhir dari RabbitMQ</div>
+    </div>
+    <div class="stat">
+      <div class="label">Data terbaru diterima</div>
+      <div class="value" id="stat-fresh">-</div>
+      <div class="note">waktu sejak update lokasi terakhir</div>
+    </div>
+    <div class="stat yellow">
+      <div class="label">Kendaraan stale</div>
+      <div class="value" id="stat-stale">-</div>
+      <div class="note" id="note-stale">data terlalu tua, perlu dicurigai</div>
+    </div>
+    <div class="stat red">
+      <div class="label">Kendaraan offline</div>
+      <div class="value" id="stat-offline">-</div>
+      <div class="note" id="note-offline">berhenti melapor melewati ambang offline</div>
+    </div>
+  </section>
+
+  <!-- 3. Peta + panel samping -->
+  <section class="cols">
+    <div class="panel map-wrap">
+      <div class="title">Peta Posisi Kendaraan</div>
+      <div id="map"></div>
+      <div id="map-fallback">Peta tidak dapat dimuat (CDN Leaflet / OpenStreetMap tidak terjangkau). Tabel kendaraan di samping tetap berfungsi penuh.</div>
+      <div class="legend" id="legend">
+        <div class="row"><span class="swatch" style="background:#4ade80;border:2px solid #16a34a"></span> Kendaraan MASUK geofence</div>
+        <div class="row"><span class="swatch" style="background:#38bdf8;border:2px solid #0284c7"></span> Kendaraan di luar geofence</div>
+        <div class="row"><span class="swatch" style="background:#f87171;border:2px solid #b91c1c"></span> Kendaraan OFFLINE (merah) / STALE (kuning)</div>
+        <div class="row"><span class="swatch ring"></span> Area geofence (radius 50 m di Monas)</div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="panel">
+        <div class="title">Posisi Terakhir Kendaraan</div>
+        <table>
+          <thead><tr><th>Kendaraan</th><th>Posisi (lat, lng)</th><th>Jarak</th><th>Geofence</th><th>Koneksi</th><th>Update</th></tr></thead>
+          <tbody id="vehicles"><tr><td colspan="6" class="empty">Memuat...</td></tr></tbody>
+        </table>
+        <div class="hint">Urut dari yang terdekat ke geofence. "Koneksi" berasal dari heartbeat: <b>online</b> (melapor normal), <b>stale</b> (terlalu tua), <b>offline</b> (berhenti melapor). "Update" adalah waktu sejak data terakhir diterima.</div>
+      </div>
+
+      <div class="panel">
+        <div class="title">Event Geofence Terbaru</div>
+        <div class="hint" style="margin-top:0;margin-bottom:6px">
+          Catatan: event dibuat saat kendaraan <b>masuk</b> geofence (langkah 4-5 di atas), dikirim via RabbitMQ lalu dikonsumsi worker.
+        </div>
+        <ul class="feed" id="events"><li class="empty">Belum ada event</li></ul>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  var geo = null, map = null, geofenceLayer = null;
+  var markers = {};
+  var lastVehTs = 0, lastEventTs = 0;
+  var hbByVehicle = {};   // vehicle_id -> status heartbeat terakhir
+  var lastHb = null;      // laporan heartbeat terakhir
+
+  /* ---------- util ---------- */
+  function haversineM(lat1, lng1, lat2, lng2) {
+    var R = 6371000, toRad = Math.PI / 180;
+    var dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+  function clock(unix) {
+    return new Date(unix * 1000).toLocaleTimeString('id-ID', { hour12: false });
+  }
+  function age(unix) {
+    if (!unix) return null;
+    var s = Math.max(0, Math.round(Date.now() / 1000 - unix));
+    if (s < 60) return s + ' dtk lalu';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + ' mnt lalu';
+    return Math.floor(m / 60) + ' jam lalu';
+  }
+  function fetchJSON(url) {
+    return fetch(url).then(function (r) { return r.json(); });
+  }
+
+  /* ---------- heartbeat ---------- */
+  var STATUS_LABEL = { online: 'ONLINE', stale: 'STALE', offline: 'OFFLINE' };
+
+  function statusLabel(s) {
+    return STATUS_LABEL[s] || (s || '-').toUpperCase();
+  }
+
+  // renderHeartbeat menyimpan status tiap kendaraan dan memperbarui
+  // kartu ringkasan serta indikator pipeline di header.
+  function renderHeartbeat(rep) {
+    if (!rep) return;
+    lastHb = rep;
+
+    hbByVehicle = {};
+    (rep.vehicles || []).forEach(function (v) {
+      hbByVehicle[v.vehicle_id] = v;
+    });
+
+    var summary = rep.summary || {};
+    var offline = summary.offline || 0;
+    var stale = summary.stale || 0;
+
+    document.getElementById('stat-offline').textContent = offline;
+    document.getElementById('stat-stale').textContent = stale;
+    document.getElementById('note-offline').textContent =
+      'berhenti melapor melewati ambang offline (' + rep.offline_after_seconds + ' dtk)';
+    document.getElementById('note-stale').textContent =
+      'terlalu tua, perlu dicurigai (' + rep.stale_after_seconds + ' dtk)';
+
+    var p = rep.pipeline || {};
+    var el = document.getElementById('hb-pipeline');
+    var conn = p.mqtt_connected ? 'tersambung' : 'putus';
+    var last = p.last_message_at ? (age(p.last_message_at) || 'baru saja') : 'belum ada pesan';
+    el.textContent = 'MQTT: ' + conn + ' · pesan terakhir ' + last;
+    el.style.color = p.healthy ? '' : 'var(--red)';
+  }
+
+  /* ---------- peta ---------- */
+  function initMap() {
+    if (typeof L === 'undefined') {
+      document.getElementById('map').style.display = 'none';
+      document.getElementById('legend').style.display = 'none';
+      document.getElementById('map-fallback').style.display = 'block';
+      return;
+    }
+    map = L.map('map', { scrollWheelZoom: true }).setView([-6.175392, 106.827153], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    geofenceLayer = L.layerGroup().addTo(map);
+  }
+  function drawGeofence() {
+    if (!map || !geo || !geofenceLayer) return;
+    geofenceLayer.clearLayers();
+    L.circle([geo.lat, geo.lng], {
+      radius: geo.radius_m, color: '#fbbf24', weight: 2, fillColor: '#f59e0b', fillOpacity: 0.12
+    }).bindTooltip('Geofence: radius ' + geo.radius_m + ' m').addTo(geofenceLayer);
+    L.circleMarker([geo.lat, geo.lng], { radius: 5, color: '#fbbf24', fillOpacity: 1 })
+      .bindTooltip('Pusat geofence').addTo(geofenceLayer);
+  }
+
+  /* ---------- pipeline ---------- */
+  function setStep(key, cls, text) {
+    var el = document.querySelector('.step[data-step="' + key + '"]');
+    if (!el) return;
+    el.classList.remove('active', 'wait');
+    if (cls) el.classList.add(cls);
+    el.querySelector('.txt').textContent = text;
+  }
+  function renderPipeline() {
+    var vehAge = age(lastVehTs);
+    var evAge  = age(lastEventTs);
+    var vehFresh = lastVehTs && (Date.now() / 1000 - lastVehTs) < 8;
+    var evFresh  = lastEventTs && (Date.now() / 1000 - lastEventTs) < 30;
+
+    setStep('ingest', vehFresh ? 'active' : '', vehFresh ? 'data masuk ' + vehAge : (vehAge ? 'data terakhir ' + vehAge : 'menunggu data...'));
+    setStep('db',     vehFresh ? 'active' : '', vehFresh ? 'tersimpan ' + vehAge : (vehAge ? 'tersimpan ' + vehAge : 'menunggu data...'));
+
+    var geoTxt = 'menunggu data...';
+    if (vehAge) {
+      var insideNow = lastStats && lastStats.inside > 0;
+      geoTxt = insideNow ? 'ada kendaraan MASUK (' + vehAge + ')' : 'semua di luar geofence (' + vehAge + ')';
+    }
+    setStep('geo', vehFresh ? (lastStats && lastStats.inside > 0 ? 'active' : 'wait') : '', geoTxt);
+
+    setStep('rabbit', evFresh ? 'active' : (lastEventTs ? 'wait' : 'wait'),
+      evFresh ? 'event terkirim ' + evAge : (lastEventTs ? 'event terakhir ' + evAge : 'menunggu kendaraan masuk geofence...'));
+    setStep('worker', evFresh ? 'active' : 'wait',
+      evFresh ? 'event diproses ' + evAge : (lastEventTs ? 'event diproses ' + evAge : 'menunggu kendaraan masuk geofence...'));
+
+    // Langkah 6: heartbeat & deteksi offline.
+    if (lastHb) {
+      var s = lastHb.summary || {};
+      var off = s.offline || 0, stl = s.stale || 0;
+      var txt = 'offline ' + off + ' · stale ' + stl + ' · online ' + (s.online || 0);
+      setStep('hb', off > 0 ? 'wait' : 'active', txt);
+    }
+  }
+
+  /* ---------- render data ---------- */
+  var lastStats = { total: 0, inside: 0 };
+
+  function renderVehicles(list) {
+    var tbody = document.getElementById('vehicles');
+    var insideCount = 0;
+
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">Belum ada data — jalankan publisher: cd app && MQTT_BROKER=tcp://localhost:1883 go run ./cmd/publisher</td></tr>';
+      document.getElementById('stat-vehicles').textContent = '0';
+      document.getElementById('stat-inside').textContent = '0';
+      lastStats = { total: 0, inside: 0 };
+      return;
+    }
+
+    // urutkan: yang di dalam geofence dulu, lalu terdekat
+    var rows = list.map(function (v) {
+      var d = geo ? haversineM(v.latitude, v.longitude, geo.lat, geo.lng) : null;
+      return { v: v, d: d, inside: d !== null && d <= geo.radius_m };
+    });
+    rows.sort(function (a, b) {
+      if (a.inside !== b.inside) return a.inside ? -1 : 1;
+      return (a.d || 0) - (b.d || 0);
+    });
+
+    var newest = 0, seen = {}, html = '';
+    rows.forEach(function (r) {
+      var v = r.v;
+      var hb = hbByVehicle[v.vehicle_id] || null;
+      if (r.inside) insideCount++;
+      if (v.timestamp > newest) newest = v.timestamp;
+      seen[v.vehicle_id] = true;
+
+      html += '<tr>' +
+        '<td><b>' + v.vehicle_id + '</b></td>' +
+        '<td>' + v.latitude.toFixed(6) + ',<br>' + v.longitude.toFixed(6) + '</td>' +
+        '<td>' + (r.d === null ? '-' : r.d.toFixed(1) + ' m') + '</td>' +
+        '<td>' + (r.d === null ? '-' :
+            r.inside ? '<span class="badge inside">MASUK</span>'
+                     : '<span class="badge outside">di luar</span>') + '</td>' +
+        '<td>' + (hb ? '<span class="badge ' + hb.status + '">' + statusLabel(hb.status) + '</span>' : '-') + '</td>' +
+        '<td>' + age(v.timestamp) + '</td>' +
+      '</tr>';
+
+      if (map) {
+        var cls = 'veh-marker' + (r.inside ? ' inside' : '') +
+                  (hb && hb.status !== 'online' ? ' ' + hb.status : '');
+        var html2 = '<div class="' + cls + '">' + v.vehicle_id + '</div>';
+        var m = markers[v.vehicle_id];
+        if (!m) {
+          m = L.marker([v.latitude, v.longitude], { icon: L.divIcon({ className: '', html: html2, iconSize: null }) }).addTo(map);
+          markers[v.vehicle_id] = m;
+        } else {
+          m.setLatLng([v.latitude, v.longitude]);
+          m.setIcon(L.divIcon({ className: '', html: html2, iconSize: null }));
+        }
+        m.bindPopup(
+          '<b>' + v.vehicle_id + '</b><br>' +
+          'Koneksi: ' + (hb ? '<b>' + statusLabel(hb.status) + '</b> (' + hb.age_seconds + ' dtk)' : '-') + '<br>' +
+          'Geofence: ' + (r.inside ? '<b style="color:#16a34a">MASUK geofence</b>' : 'di luar geofence') + '<br>' +
+          (r.d !== null ? 'Jarak ke pusat: ' + r.d.toFixed(1) + ' m (radius 50 m)<br>' : '') +
+          'Posisi: ' + v.latitude.toFixed(6) + ', ' + v.longitude.toFixed(6) + '<br>' +
+          'Update: ' + clock(v.timestamp) + ' (' + age(v.timestamp) + ')'
+        );
+      }
+    });
+
+    Object.keys(markers).forEach(function (id) {
+      if (!seen[id] && map) { map.removeLayer(markers[id]); delete markers[id]; }
+    });
+
+    tbody.innerHTML = html;
+    document.getElementById('stat-vehicles').textContent = rows.length;
+    document.getElementById('stat-inside').textContent = insideCount;
+    document.getElementById('stat-fresh').textContent = age(newest) || '-';
+    lastStats = { total: rows.length, inside: insideCount };
+    if (newest > lastVehTs) lastVehTs = newest;
+  }
+
+  function renderEvents(list) {
+    var ul = document.getElementById('events');
+    document.getElementById('stat-events').textContent = list.length;
+    if (!list.length) {
+      ul.innerHTML = '<li class="empty">Belum ada event — event muncul saat kendaraan masuk radius 50 m geofence.</li>';
+      return;
+    }
+    var newest = lastEventTs, html = '';
+    list.slice(0, 50).forEach(function (e) {
+      if (e.timestamp > newest) newest = e.timestamp;
+      // Nama event diambil dari payload agar tetap akurat baik untuk
+      // geofence_entry maupun geofence_exit (opsional).
+      var label = e.event === 'geofence_exit' ? 'keluar geofence' : 'masuk geofence';
+      html += '<li>' +
+        '<span><span class="who">' + e.vehicle_id + '</span> <span class="what">' + label + '</span><br>' +
+        '<span class="coords">posisi ' + e.location.latitude.toFixed(6) + ', ' + e.location.longitude.toFixed(6) + '</span></span>' +
+        '<span class="when">' + clock(e.timestamp) + '<br>' + age(e.timestamp) + '</span>' +
+      '</li>';
+    });
+    ul.innerHTML = html;
+    if (newest > lastEventTs) lastEventTs = newest;
+  }
+
+  function renderHeader() {
+    document.getElementById('last-update').textContent = 'update: ' +
+      new Date().toLocaleTimeString('id-ID', { hour12: false });
+  }
+
+  /* ---------- refresh ---------- */
+  function refresh() {
+    Promise.all([
+      fetchJSON('/api/vehicles'),
+      fetchJSON('/api/geofence-events'),
+      // Heartbeat bersifat opsional: kalau endpoint-nya belum tersedia,
+      // dashboard tetap harus menampilkan data kendaraan.
+      fetchJSON('/api/heartbeat').catch(function () { return null; })
+    ])
+      .then(function (res) {
+        var st = document.getElementById('api-status');
+        st.textContent = 'API OK'; st.className = 'pill ok';
+        renderHeartbeat(res[2] || null);
+        renderVehicles(res[0] || []);
+        renderEvents(res[1] || []);
+        renderHeader();
+      })
+      .catch(function () {
+        var st = document.getElementById('api-status');
+        st.textContent = 'API ERROR'; st.className = 'pill err';
+      })
+      .then(function () { renderPipeline(); });
+  }
+
+  /* ---------- mulai ---------- */
+  fetchJSON('/api/geofence').then(function (g) { geo = g; drawGeofence(); }).catch(function () {});
+  initMap();
+  refresh();
+  setInterval(refresh, 2000);
+  setInterval(renderPipeline, 1000); // agar umur "x dtk lalu" ikut berdetak
+})();
+</script>
+</body>
+</html>

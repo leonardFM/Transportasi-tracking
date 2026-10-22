@@ -1,0 +1,484 @@
+{
+	"info": {
+		"_postman_id": "transjakarta-fleet-management",
+		"name": "Transjakarta Fleet Management",
+		"description": "Koleksi Postman untuk menguji sistem manajemen armada kendaraan. Setiap request sudah memiliki test script (assertion) sehingga bisa dipakai sebagai pembuktian bahwa API benar-benar bekerja.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"item": [
+				{
+					"name": "GET Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						},
+						"description": "Health check untuk memastikan API berjalan"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"const body = pm.response.json();",
+									"pm.test('body status = ok', function () { pm.expect(body.status).to.eql('ok'); });"
+								]
+							}
+						}
+					],
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Vehicle Location API",
+			"item": [
+				{
+					"name": "GET Last Location",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vehicles/{{vehicle_id}}/location",
+							"host": ["{{base_url}}"],
+							"path": ["vehicles", "{{vehicle_id}}", "location"]
+						},
+						"description": "Lokasi terakhir kendaraan, ditentukan oleh timestamp terbesar (bukan urutan pesan diterima)"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"const body = pm.response.json();",
+									"pm.test('vehicle_id sesuai', function () { pm.expect(body.vehicle_id).to.eql(pm.environment.get('vehicle_id')); });",
+									"pm.test('latitude dalam rentang [-90, 90]', function () { pm.expect(body.latitude).to.be.within(-90, 90); });",
+									"pm.test('longitude dalam rentang [-180, 180]', function () { pm.expect(body.longitude).to.be.within(-180, 180); });",
+									"pm.test('timestamp adalah unix detik', function () { pm.expect(body.timestamp).to.be.a('number'); pm.expect(body.timestamp).to.be.above(1700000000); pm.expect(body.timestamp).to.be.below(4102444800); });"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET Last Location - 404 Unknown Vehicle",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vehicles/VEHICLE-TIDAK-ADA/location",
+							"host": ["{{base_url}}"],
+							"path": ["vehicles", "VEHICLE-TIDAK-ADA", "location"]
+						},
+						"description": "Kendaraan yang tidak pernah melapor harus menghasilkan 404"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 404', function () { pm.response.to.have.status(404); });",
+									"pm.test('memuat pesan error', function () { pm.expect(pm.response.json()).to.have.property('error'); });"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET History Location",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vehicles/{{vehicle_id}}/history?start={{start_timestamp}}&end={{end_timestamp}}",
+							"host": ["{{base_url}}"],
+							"path": ["vehicles", "{{vehicle_id}}", "history"],
+							"query": [
+								{
+									"key": "start",
+									"value": "{{start_timestamp}}",
+									"description": "Unix timestamp dalam detik (inklusif)"
+								},
+								{
+									"key": "end",
+									"value": "{{end_timestamp}}",
+									"description": "Unix timestamp dalam detik (inklusif)"
+								}
+							]
+						},
+						"description": "Riwayat lokasi dalam rentang [start, end], urut naik"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"const body = pm.response.json();",
+									"pm.test('respons berupa array', function () { pm.expect(body).to.be.an('array'); });",
+									"pm.test('semua baris di dalam rentang', function () {",
+									"  const start = parseInt(pm.environment.get('start_timestamp'), 10);",
+									"  const end = parseInt(pm.environment.get('end_timestamp'), 10);",
+									"  body.forEach(function (row) {",
+									"    pm.expect(row.timestamp).to.be.at.least(start);",
+									"    pm.expect(row.timestamp).to.be.at.most(end);",
+									"  });",
+									"});",
+									"pm.test('urutan timestamp menaik', function () {",
+									"  for (let i = 1; i < body.length; i++) {",
+									"    pm.expect(body[i].timestamp).to.be.at.least(body[i - 1].timestamp);",
+									"  }",
+									"});"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET History Location - With Limit",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vehicles/{{vehicle_id}}/history?start={{start_timestamp}}&end={{end_timestamp}}&limit=10",
+							"host": ["{{base_url}}"],
+							"path": ["vehicles", "{{vehicle_id}}", "history"],
+							"query": [
+								{ "key": "start", "value": "{{start_timestamp}}" },
+								{ "key": "end", "value": "{{end_timestamp}}" },
+								{ "key": "limit", "value": "10", "description": "Maksimal jumlah baris (default 1000, maks 10000)" }
+							]
+						},
+						"description": "Riwayat dengan batas jumlah baris"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"pm.test('jumlah baris <= limit', function () { pm.expect(pm.response.json().length).to.be.at.most(10); });"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET History - 400 Invalid Timestamp",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vehicles/{{vehicle_id}}/history?start=abc&end=1700000000",
+							"host": ["{{base_url}}"],
+							"path": ["vehicles", "{{vehicle_id}}", "history"],
+							"query": [
+								{ "key": "start", "value": "abc" },
+								{ "key": "end", "value": "1700000000" }
+							]
+						},
+						"description": "Parameter waktu yang bukan angka harus ditolak"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 400', function () { pm.response.to.have.status(400); });"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET History - 400 Reversed Range",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vehicles/{{vehicle_id}}/history?start=1700000000&end=1600000000",
+							"host": ["{{base_url}}"],
+							"path": ["vehicles", "{{vehicle_id}}", "history"],
+							"query": [
+								{ "key": "start", "value": "1700000000" },
+								{ "key": "end", "value": "1600000000" }
+							]
+						},
+						"description": "start > end harus ditolak"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 400', function () { pm.response.to.have.status(400); });"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET History - 400 Millisecond Unit",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/vehicles/{{vehicle_id}}/history?start=1750000000000&end=1750003600000",
+							"host": ["{{base_url}}"],
+							"path": ["vehicles", "{{vehicle_id}}", "history"],
+							"query": [
+								{ "key": "start", "value": "1750000000000" },
+								{ "key": "end", "value": "1750003600000" }
+							]
+						},
+						"description": "Timestamp milidetik harus ditolak dengan pesan jelas, bukan diam-diam mengembalikan array kosong"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 400', function () { pm.response.to.have.status(400); });",
+									"pm.test('pesan menyinggung satuan milidetik', function () { pm.expect(pm.response.json().error).to.include('milidetik'); });"
+								]
+							}
+						}
+					],
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Dashboard API",
+			"item": [
+				{
+					"name": "GET Vehicles",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/vehicles",
+							"host": ["{{base_url}}"],
+							"path": ["api", "vehicles"]
+						},
+						"description": "Lokasi terakhir semua kendaraan"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"const body = pm.response.json();",
+									"pm.test('respons berupa array', function () { pm.expect(body).to.be.an('array'); });",
+									"pm.test('setiap baris punya koordinat valid', function () {",
+									"  body.forEach(function (row) {",
+									"    pm.expect(row.latitude).to.be.within(-90, 90);",
+									"    pm.expect(row.longitude).to.be.within(-180, 180);",
+									"  });",
+									"});"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET Geofence Events",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/geofence-events",
+							"host": ["{{base_url}}"],
+							"path": ["api", "geofence-events"]
+						},
+						"description": "Event geofence yang sudah diproses worker (dibaca dari tabel geofence_events)"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"const body = pm.response.json();",
+									"pm.test('respons berupa array', function () { pm.expect(body).to.be.an('array'); });",
+									"pm.test('event memakai nama yang dikenal', function () {",
+									"  body.forEach(function (ev) {",
+									"    pm.expect(ev.event).to.be.oneOf(['geofence_entry', 'geofence_exit']);",
+									"    pm.expect(ev).to.have.property('vehicle_id');",
+									"    pm.expect(ev).to.have.property('location');",
+									"  });",
+									"});"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET Geofence Config",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/geofence",
+							"host": ["{{base_url}}"],
+							"path": ["api", "geofence"]
+						},
+						"description": "Titik pusat & radius geofence"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"const body = pm.response.json();",
+									"pm.test('radius positif', function () { pm.expect(body.radius_m).to.be.above(0); });",
+									"pm.test('latitude dalam rentang', function () { pm.expect(body.lat).to.be.within(-90, 90); });"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET Dashboard HTML",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/dashboard",
+							"host": ["{{base_url}}"],
+							"path": ["dashboard"]
+						},
+						"description": "Halaman dashboard observability"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"pm.test('mengembalikan HTML', function () { pm.expect(pm.response.text()).to.include('<html'); });"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "GET Heartbeat",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/heartbeat",
+							"host": ["{{base_url}}"],
+							"path": ["api", "heartbeat"]
+						},
+						"description": "Status online/stale/offline tiap kendaraan + kondisi pipeline ingest MQTT"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test('status 200', function () { pm.response.to.have.status(200); });",
+									"const body = pm.response.json();",
+									"pm.test('vehicles berupa array', function () { pm.expect(body.vehicles).to.be.an('array'); });",
+									"pm.test('summary memuat ketiga status', function () {",
+									"  pm.expect(body.summary).to.have.property('online');",
+									"  pm.expect(body.summary).to.have.property('stale');",
+									"  pm.expect(body.summary).to.have.property('offline');",
+									"});",
+									"pm.test('ambang waktu dilaporkan', function () {",
+									"  pm.expect(body.stale_after_seconds).to.be.above(0);",
+									"  pm.expect(body.offline_after_seconds).to.be.above(body.stale_after_seconds);",
+									"});",
+									"pm.test('setiap kendaraan punya status yang dikenal', function () {",
+									"  body.vehicles.forEach(function (v) {",
+									"    pm.expect(v.status).to.be.oneOf(['online', 'stale', 'offline']);",
+									"    pm.expect(v.age_seconds).to.be.at.least(0);",
+									"    pm.expect(v).to.have.property('last_seen');",
+									"  });",
+									"});",
+									"pm.test('pipeline MQTT dilaporkan', function () {",
+									"  pm.expect(body.pipeline).to.have.property('mqtt_connected');",
+									"  pm.expect(body.pipeline.messages_total).to.be.at.least(0);",
+									"});"
+								]
+							}
+						}
+					],
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Rentang waktu default: 1 jam terakhir sampai sekarang, agar request",
+					"// riwayat benar-benar mengembalikan data dari publisher yang berjalan.",
+					"const now = Math.floor(Date.now() / 1000);",
+					"pm.environment.set('end_timestamp', String(now));",
+					"pm.environment.set('start_timestamp', String(now - 3600));"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "vehicle_id",
+			"value": "B1234XYZ",
+			"type": "string"
+		},
+		{
+			"key": "start_timestamp",
+			"value": "1750000000",
+			"type": "string"
+		},
+		{
+			"key": "end_timestamp",
+			"value": "1750003600",
+			"type": "string"
+		}
+	]
+}
